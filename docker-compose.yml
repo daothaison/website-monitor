@@ -1,0 +1,98 @@
+version: '2.2'
+
+networks:
+  frontend:
+    name: frontend
+
+services:
+  traefik:
+    image: traefik:2.2
+    restart: always
+    command:
+      - --api.dashboard=true
+      - --entrypoints.http.address=:80
+      - --providers.docker
+      - --providers.docker.network=frontend
+      - --providers.docker.watch=true
+      - --providers.docker.exposedbydefault=false
+    ports:
+      - 8080:80
+    networks:
+      - frontend
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-traefik.rule=Host(`traefik.${DOMAIN}`)
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-traefik.service=api@internal
+      - traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-traefik-dashboard.redirectRegex.regex=/
+      - traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-traefik-dashboard.redirectRegex.replacement=/dashboard/
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  prometheus:
+    image: prom/prometheus
+    restart: always
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-lifecycle'
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-prometheus.rule=Host(`prometheus`)
+      - traefik.http.services.${COMPOSE_PROJECT_NAME}-prometheus.loadbalancer.server.port=9090
+    networks:
+      - default
+    volumes:
+      - ./data/prometheus:/prometheus
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./config/rules.yml:/etc/prometheus/rules.yml
+    ports:
+      - 9090:9090
+  alertmanager:
+    image: prom/alertmanager
+    restart: always
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-alertmanager.rule=Host(`alertmanager`)
+      - traefik.http.services.${COMPOSE_PROJECT_NAME}-alertmanager.loadbalancer.server.port=9093
+    ports:
+      - 9093:9093
+    volumes:
+      - ./data/alertmanager/:/etc/alertmanager/
+      - ./config/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    networks:
+      - default
+    depends_on:
+      - prometheus
+
+  blackbox_exporter:
+    image: prom/blackbox-exporter
+    restart: always
+    tty: true
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-backbox.rule=Host(`blackbox_exporter`)
+      - traefik.http.services.${COMPOSE_PROJECT_NAME}-backbox.loadbalancer.server.port=9115
+    ports:
+      - 9115:9115
+    dns: 8.8.8.8
+    command: --config.file=/etc/blackbox/blackbox.yml
+    volumes:
+      - ./config/blackbox/:/etc/blackbox/
+    networks:
+      - default
+
+  grafana:
+    image: grafana/grafana-enterprise
+    restart: always
+    tty: true
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME}-grafana.rule=Host(`grafana`)
+      - traefik.http.services.${COMPOSE_PROJECT_NAME}-grafana.loadbalancer.server.port=3000
+    ports:
+      - ${PORT:-80}:3000
+    volumes:
+    - ./data/grafana:/var/lib/grafana
+    - ./config/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - frontend
+      - default
